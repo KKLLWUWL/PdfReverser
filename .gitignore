@@ -1,0 +1,10 @@
+.gradle/
+build/
+*/build/
+local.properties
+tests/pdf_in/
+tests/browser_out_*.pdf
+tests/b64_*.txt
+tests/*_out_*.pdf
+tests/gen_test_pdfs.py
+tests/gen_icon.py
