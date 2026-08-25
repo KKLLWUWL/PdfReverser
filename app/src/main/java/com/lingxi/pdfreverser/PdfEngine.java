@@ -26,6 +26,7 @@ public class PdfEngine {
     private final Context app;
     private WebView webView;
     private Callback current;
+    private byte[] pendingInput;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private PdfEngine(Context context) {
@@ -58,11 +59,35 @@ public class PdfEngine {
      */
     public void process(final byte[] input, final Callback cb) {
         current = cb;
+        pendingInput = input;
         try {
-            String b64 = Base64.encodeToString(input, Base64.NO_WRAP);
-            webView().evaluateJavascript("window.__reverseBase64('" + b64 + "');", null);
+            webView(); // 触发引擎初始化（异步加载 reverser.html）
+            retryIfNotReady(0);
         } catch (Throwable t) {
             fail(t.getMessage());
+        }
+    }
+
+    /** 等待引擎就绪后注入处理，最多重试约 3 秒 */
+    private void retryIfNotReady(final int attempt) {
+        if (attempt > 30) { fail("处理引擎加载超时"); return; }
+        try {
+            String b64 = Base64.encodeToString(pendingInput, Base64.NO_WRAP);
+            final String js = "(function(){ if(window.__pdfEngineReady){"
+                    + "window.__reverseBase64('" + b64 + "'); return 'go'; } return 'wait'; })();";
+            webView().evaluateJavascript(js, new android.webkit.ValueCallback<String>() {
+                @Override public void onReceiveValue(String v) {
+                    if (v == null || !v.contains("go")) {
+                        main.postDelayed(new Runnable() {
+                            @Override public void run() { retryIfNotReady(attempt + 1); }
+                        }, 100);
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            main.postDelayed(new Runnable() {
+                @Override public void run() { retryIfNotReady(attempt + 1); }
+            }, 100);
         }
     }
 

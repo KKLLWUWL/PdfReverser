@@ -179,7 +179,10 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.VERTICAL);
         row.setBackgroundResource(R.drawable.bg_card);
         row.setPadding(dp(16), dp(14), dp(16), dp(14));
-        ((ViewGroup.MarginLayoutParams) row.getLayoutParams()).bottomMargin = dp(12);
+        ViewGroup.MarginLayoutParams mp = new ViewGroup.MarginLayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mp.bottomMargin = dp(12);
+        row.setLayoutParams(mp);
 
         TextView k = new TextView(this);
         k.setText("选择打开方式（固定发送目标 APP）");

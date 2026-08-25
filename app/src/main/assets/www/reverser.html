@@ -33,6 +33,8 @@
     return btoa(bin);
   }
 
+  window.__pdfEngineReady = true;   // 引擎就绪标志（Java 端据此等待）
+
   window.__reverseBase64 = function (b64) {
     var cb = function (err, outB64, n) {
       if (window.AndroidBridge && AndroidBridge.onResult) {
