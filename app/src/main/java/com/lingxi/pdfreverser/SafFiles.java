@@ -52,6 +52,16 @@ public class SafFiles {
         return out;
     }
 
+    /** 生成文件选择器可预定位到该目录的 document URI（供 EXTRA_INITIAL_URI 使用） */
+    public static Uri treeAsDocumentUri(Uri treeUri) {
+        try {
+            String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
+            return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** 取树根目录的显示名 */
     public static String treeName(Context ctx, Uri treeUri) {
         if (treeUri == null) return "未设置";

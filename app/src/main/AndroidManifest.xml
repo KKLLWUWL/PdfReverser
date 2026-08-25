@@ -20,10 +20,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false" />
-
         <provider
             android:name=".FileContentProvider"
             android:authorities="com.lingxi.pdfreverser.files"

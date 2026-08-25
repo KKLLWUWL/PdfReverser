@@ -1,16 +1,23 @@
 package com.lingxi.pdfreverser;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ComponentName;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -21,17 +28,25 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 首页：展示 1-2 个常用文件夹内的 PDF，
- * 点击即倒序重排并直接发送到设置的目标 APP。
+ * 首页：
+ *  - 1-2 个常用文件夹卡片：快捷列出其中 PDF；也可点击跳转到系统文件选择器，
+ *    预定位到该文件夹，在整棵目录树中选择任意 PDF。
+ *  - 两个文件夹下方是「选择打开方式」按钮：固定一个可接收 PDF 的目标 APP，
+ *    之后点 PDF 即直接发送，无需确认。
+ *  - 点击 PDF → 结构级倒序重排 → 直接发送到目标 APP。
  */
 public class MainActivity extends Activity {
 
     private static final int REQ_PICK_FOLDER_1 = 101;
     private static final int REQ_PICK_FOLDER_2 = 102;
+    private static final int REQ_PICK_FILE_1 = 201;
+    private static final int REQ_PICK_FILE_2 = 202;
 
     private SettingsStore settings;
     private LinearLayout content;
@@ -45,55 +60,43 @@ public class MainActivity extends Activity {
 
         content = findViewById(R.id.content);
         progressOverlay = findViewById(R.id.progressOverlay);
-
-        findViewById(R.id.btnSettings).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                startActivity(new Intent(MainActivity.this, SettingsActivity.class));
-            }
-        });
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        rebuildFolders();
+        rebuild();
     }
 
-    private void rebuildFolders() {
+    /** 重建：两个文件夹卡片 + 「选择打开方式」按钮 + 说明 */
+    private void rebuild() {
         content.removeAllViews();
         for (int slot = 1; slot <= SettingsStore.FOLDER_SLOTS; slot++) {
             content.addView(buildFolderBlock(slot));
         }
-        if (!settings.hasFolders()) {
-            TextView tip = new TextView(this);
-            tip.setText("请先在上方齿轮「设置」中选择 1-2 个常用文件夹，\n例如「下载」「文档」或专门的打印目录。");
-            tip.setTextSize(13);
-            tip.setTextColor(0xFF999999);
-            int p = dp(16);
-            tip.setPadding(p, p, p, p);
-            tip.setGravity(android.view.Gravity.CENTER);
-            content.addView(tip, 0);
-        }
+        content.addView(buildTargetRow());
+        content.addView(buildNote());
     }
 
+    // ---------- 文件夹卡片 ----------
     private View buildFolderBlock(final int slot) {
         final Uri treeUri = settings.getFolder(slot);
 
         LinearLayout block = new LinearLayout(this);
         block.setOrientation(LinearLayout.VERTICAL);
 
-        // 头部：文件夹名 + 更换
+        // 头部：文件夹名 + 选择/更换
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        head.setPadding(dp(16), dp(8), dp(12), dp(8));
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(16), dp(10), dp(12), dp(4));
 
         TextView name = new TextView(this);
         name.setTextSize(17);
         name.setTextColor(0xFF1D1D1F);
-        name.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
         name.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        name.setText(slot + " · " + folderName(treeUri));
+        name.setText((slot == 1 ? "常用文件夹一" : "常用文件夹二") + " · " + SafFiles.treeName(this, treeUri));
         head.addView(name);
 
         Button change = new Button(this);
@@ -104,39 +107,43 @@ public class MainActivity extends Activity {
         change.setPadding(dp(12), dp(4), dp(12), dp(4));
         change.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-                startActivityForResult(intent, slot == 1 ? REQ_PICK_FOLDER_1 : REQ_PICK_FOLDER_2);
+                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+                        slot == 1 ? REQ_PICK_FOLDER_1 : REQ_PICK_FOLDER_2);
             }
         });
         head.addView(change);
         block.addView(head);
 
         if (treeUri == null) {
-            TextView empty = new TextView(this);
-            empty.setText("未设置文件夹，点击右侧「选择」添加");
-            empty.setTextSize(13);
-            empty.setTextColor(0xFF999999);
-            empty.setPadding(dp(16), dp(4), dp(16), dp(16));
-            block.addView(empty);
+            block.addView(textRow("未设置文件夹，点击右侧「选择」添加"));
         } else {
+            // 「在文件夹中选择 PDF」：跳转系统文件选择器并预定位到该文件夹
+            Button browse = new Button(this);
+            browse.setText("在此文件夹中选择 PDF ›");
+            browse.setTextSize(14);
+            browse.setTextColor(0xFF0071E3);
+            browse.setBackgroundResource(R.drawable.bg_card);
+            browse.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+            browse.setPadding(dp(16), dp(12), dp(16), dp(12));
+            browse.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    openDocumentPicker(slot, treeUri);
+                }
+            });
+            block.addView(browse);
+
+            // 根目录下 PDF 快捷列表
             List<PdfEntry> pdfs = listPdfs(treeUri);
             if (pdfs.isEmpty()) {
-                TextView empty = new TextView(this);
-                empty.setText("该文件夹内没有 PDF 文件");
-                empty.setTextSize(13);
-                empty.setTextColor(0xFF999999);
-                empty.setPadding(dp(16), dp(4), dp(16), dp(16));
-                block.addView(empty);
+                block.addView(textRow("该文件夹根目录暂无 PDF（可用上方按钮进入选择）"));
             } else {
                 ListView list = new ListView(this);
                 list.setDivider(null);
                 list.setPadding(dp(12), 0, dp(12), dp(4));
                 list.setAdapter(new PdfAdapter(pdfs));
-                list.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
-                    @Override public void onItemClick(android.widget.AdapterView<?> parent, View view,
-                                                      int position, long id) {
-                        PdfEntry e = (PdfEntry) parent.getItemAtPosition(position);
-                        processAndSend(e);
+                list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+                    @Override public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                        processAndSend((PdfEntry) parent.getItemAtPosition(position));
                     }
                 });
                 block.addView(list);
@@ -145,10 +152,111 @@ public class MainActivity extends Activity {
         return block;
     }
 
-    private String folderName(Uri treeUri) {
-        return SafFiles.treeName(this, treeUri);
+    private TextView textRow(String s) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(13);
+        t.setTextColor(0xFF999999);
+        t.setPadding(dp(16), dp(6), dp(16), dp(12));
+        return t;
     }
 
+    /** 打开系统文件选择器，预定位到常用文件夹，选中的 PDF 直接处理 */
+    private void openDocumentPicker(int slot, Uri treeUri) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/pdf");
+        Uri initial = SafFiles.treeAsDocumentUri(treeUri);
+        if (initial != null) {
+            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial);
+        }
+        startActivityForResult(intent, slot == 1 ? REQ_PICK_FILE_1 : REQ_PICK_FILE_2);
+    }
+
+    // ---------- 目标 APP 选择（放在两个文件夹下方） ----------
+    private View buildTargetRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setBackgroundResource(R.drawable.bg_card);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        ((ViewGroup.MarginLayoutParams) row.getLayoutParams()).bottomMargin = dp(12);
+
+        TextView k = new TextView(this);
+        k.setText("选择打开方式（固定发送目标 APP）");
+        k.setTextSize(13);
+        k.setTextColor(0xFF666677);
+        row.addView(k);
+
+        String[] t = settings.getTargetApp();
+        String cur = t == null ? "未设置 · 点击选择" : appLabel(t[0], t[1]);
+
+        TextView v = new TextView(this);
+        v.setText(cur);
+        v.setTextSize(17);
+        v.setTextColor(t == null ? 0xFF0071E3 : 0xFF1D1D1F);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(0, dp(3), 0, 0);
+        row.addView(v);
+
+        TextView hint = new TextView(this);
+        hint.setText("选择后可接收 PDF 的应用之一；之后点 PDF 即直接发送、无需确认；\n想换其他方式时，再点这里重新选择即可。");
+        hint.setTextSize(12);
+        hint.setTextColor(0xFF999999);
+        hint.setPadding(0, dp(6), 0, 0);
+        row.addView(hint);
+
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { pickTargetApp(); }
+        });
+        return row;
+    }
+
+    private void pickTargetApp() {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("application/pdf");
+        final List<ResolveInfo> apps = getPackageManager().queryIntentActivities(send, 0);
+        if (apps.isEmpty()) {
+            new AlertDialog.Builder(this).setMessage("未找到可接收 PDF 的应用")
+                    .setPositiveButton("好", null).show();
+            return;
+        }
+        String[] names = new String[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            names[i] = apps.get(i).loadLabel(getPackageManager()).toString();
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("选择打开方式")
+                .setItems(names, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int which) {
+                        ResolveInfo r = apps.get(which);
+                        settings.setTargetApp(r.activityInfo.packageName, r.activityInfo.name);
+                        rebuild();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private String appLabel(String pkg, String act) {
+        try {
+            ComponentName cn = new ComponentName(pkg, act);
+            return getPackageManager().getActivityInfo(cn, 0).loadLabel(getPackageManager()).toString();
+        } catch (PackageManager.NameNotFoundException e) {
+            return pkg;
+        }
+    }
+
+    private View buildNote() {
+        TextView note = new TextView(this);
+        note.setText("用法：打印机顺序出纸时，PDF 倒序后打印即为正确顺序。\n· 超过 1 页自动倒序重排，仅调整页序、不损失清晰度；单页直接发送。\n· 重排结果为临时文件，不会保存在手机。");
+        note.setTextSize(12);
+        note.setTextColor(0xFF999999);
+        note.setLineSpacing(dp(4), 1f);
+        note.setPadding(dp(16), 0, dp(16), 0);
+        return note;
+    }
+
+    // ---------- 文件列表 ----------
     private static class PdfEntry {
         final String name;
         final Uri uri;
@@ -202,7 +310,7 @@ public class MainActivity extends Activity {
         showProgress(true);
         final byte[] input;
         try {
-            java.io.InputStream is = getContentResolver().openInputStream(entry.uri);
+            InputStream is = getContentResolver().openInputStream(entry.uri);
             if (is == null) { showProgress(false); toast("无法读取文件"); return; }
             input = readAll(is);
             is.close();
@@ -217,8 +325,7 @@ public class MainActivity extends Activity {
                 showProgress(false);
                 byte[] toSend = (outBytes == null) ? input : outBytes;
                 String fileName = baseName(entry.name);
-                Uri shareUri = FileContentProvider.shareFile(MainActivity.this,
-                        fileName, toSend);
+                Uri shareUri = FileContentProvider.shareFile(MainActivity.this, fileName, toSend);
                 if (shareUri == null) { toast("生成临时文件失败"); return; }
                 sendToApp(shareUri, fileName, pageCount);
                 cleanupCacheExcept(fileName);
@@ -263,8 +370,8 @@ public class MainActivity extends Activity {
     }
 
     // ---------- 工具 ----------
-    private byte[] readAll(java.io.InputStream is) throws java.io.IOException {
-        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+    private byte[] readAll(InputStream is) throws java.io.IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
         byte[] b = new byte[65536];
         int n;
         while ((n = is.read(b)) != -1) buf.write(b, 0, n);
@@ -278,9 +385,7 @@ public class MainActivity extends Activity {
         return stem + "_reverse.pdf";
     }
 
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
-    }
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
@@ -292,13 +397,34 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
-        Uri tree = data.getData();
+        Uri uri = data.getData();
+
+        if (requestCode == REQ_PICK_FOLDER_1 || requestCode == REQ_PICK_FOLDER_2) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignore) { }
+            settings.setFolder(requestCode == REQ_PICK_FOLDER_1 ? 1 : 2, uri);
+            rebuild();
+            return;
+        }
+        // 文件选择器返回：直接处理所选 PDF
+        int slot = (requestCode == REQ_PICK_FILE_1) ? 1 : 2;
+        String name = queryDisplayName(uri);
+        processAndSend(new PdfEntry(name, uri));
+    }
+
+    private String queryDisplayName(Uri uri) {
+        String name = "print.pdf";
         try {
-            getContentResolver().takePersistableUriPermission(tree,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Cursor c = getContentResolver().query(uri,
+                    new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                if (n != null && !n.isEmpty()) name = n;
+                c.close();
+            }
         } catch (Exception ignore) { }
-        int slot = (requestCode == REQ_PICK_FOLDER_1) ? 1 : 2;
-        settings.setFolder(slot, tree);
-        rebuildFolders();
+        return name;
     }
 }
