@@ -12,6 +12,7 @@ public class SettingsStore {
     private static final String KEY_FOLDER_2 = "folder_2";
     private static final String KEY_TARGET_PKG = "target_pkg";
     private static final String KEY_TARGET_ACT = "target_act";
+    private static final String KEY_TARGET_MODE = "target_mode";   // send / view
 
     private final SharedPreferences sp;
 
@@ -31,14 +32,18 @@ public class SettingsStore {
                 uri == null ? null : uri.toString()).apply();
     }
 
-    public void setTargetApp(String pkg, String activity) {
-        sp.edit().putString(KEY_TARGET_PKG, pkg).putString(KEY_TARGET_ACT, activity).apply();
+    public void setTargetApp(String pkg, String activity, String mode) {
+        sp.edit().putString(KEY_TARGET_PKG, pkg)
+                .putString(KEY_TARGET_ACT, activity)
+                .putString(KEY_TARGET_MODE, mode).apply();
     }
 
+    /** 返回 {pkg, activity, mode}；未设置时为 null */
     public String[] getTargetApp() {
         String pkg = sp.getString(KEY_TARGET_PKG, null);
         String act = sp.getString(KEY_TARGET_ACT, null);
-        return (pkg == null || act == null) ? null : new String[]{pkg, act};
+        String mode = sp.getString(KEY_TARGET_MODE, "send");
+        return (pkg == null || act == null) ? null : new String[]{pkg, act, mode};
     }
 
     public boolean hasFolders() {

@@ -117,17 +117,22 @@ public class MainActivity extends Activity {
         if (treeUri == null) {
             block.addView(textRow("未设置文件夹，点击右侧「选择」添加"));
         } else {
-            // 「在文件夹中选择 PDF」：跳转系统文件选择器并预定位到该文件夹
+            // 「在此文件夹中选择 PDF」：应用内浏览器直接进入该文件夹（主按钮，加大）
             Button browse = new Button(this);
-            browse.setText("在此文件夹中选择 PDF ›");
-            browse.setTextSize(14);
-            browse.setTextColor(0xFF0071E3);
-            browse.setBackgroundResource(R.drawable.bg_card);
-            browse.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-            browse.setPadding(dp(16), dp(12), dp(16), dp(12));
+            browse.setText("在此文件夹中选择 PDF");
+            browse.setTextSize(16);
+            browse.setTextColor(0xFFFFFFFF);
+            browse.setTypeface(Typeface.DEFAULT_BOLD);
+            browse.setBackgroundResource(R.drawable.bg_primary_btn);
+            browse.setGravity(Gravity.CENTER);
+            browse.setPadding(dp(16), dp(16), dp(16), dp(16));
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            bp.setMargins(dp(12), dp(8), dp(12), dp(10));
+            browse.setLayoutParams(bp);
             browse.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
-                    openDocumentPicker(slot, treeUri);
+                    openFolderBrowser(slot, treeUri);
                 }
             });
             block.addView(browse);
@@ -161,15 +166,12 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    /** 打开系统文件选择器，预定位到常用文件夹，选中的 PDF 直接处理 */
-    private void openDocumentPicker(int slot, Uri treeUri) {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/pdf");
-        Uri initial = SafFiles.treeAsDocumentUri(treeUri);
-        if (initial != null) {
-            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial);
-        }
+    /** 打开应用内文件夹浏览器（直接进入该常用文件夹，不依赖系统选择器） */
+    private void openFolderBrowser(int slot, Uri treeUri) {
+        Intent intent = new Intent(this, BrowseActivity.class);
+        intent.putExtra(BrowseActivity.EXTRA_TREE, treeUri.toString());
+        intent.putExtra(BrowseActivity.EXTRA_TITLE,
+                SafFiles.treeName(this, treeUri));
         startActivityForResult(intent, slot == 1 ? REQ_PICK_FILE_1 : REQ_PICK_FILE_2);
     }
 
@@ -215,24 +217,42 @@ public class MainActivity extends Activity {
     }
 
     private void pickTargetApp() {
+        // 合并两类入口（均声明于 Manifest <queries>）：
+        // 1) 可「分享/发送」PDF 的应用；2) 可「打开/查看」PDF 的应用（WPS 等多数只注册后者）
+        final List<ResolveInfo> apps = new ArrayList<>();
+        final List<String> modes = new ArrayList<>();
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        PackageManager pm = getPackageManager();
+
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("application/pdf");
-        final List<ResolveInfo> apps = getPackageManager().queryIntentActivities(send, 0);
+        for (ResolveInfo r : pm.queryIntentActivities(send, 0)) {
+            String key = r.activityInfo.packageName + "/" + r.activityInfo.name;
+            if (seen.add(key)) { apps.add(r); modes.add("send"); }
+        }
+        Intent view = new Intent(Intent.ACTION_VIEW);
+        view.setType("application/pdf");
+        for (ResolveInfo r : pm.queryIntentActivities(view, 0)) {
+            String key = r.activityInfo.packageName + "/" + r.activityInfo.name;
+            if (seen.add(key)) { apps.add(r); modes.add("view"); }
+        }
+
         if (apps.isEmpty()) {
-            new AlertDialog.Builder(this).setMessage("未找到可接收 PDF 的应用")
+            new AlertDialog.Builder(this).setMessage("未找到可打开 PDF 的应用")
                     .setPositiveButton("好", null).show();
             return;
         }
         String[] names = new String[apps.size()];
         for (int i = 0; i < apps.size(); i++) {
-            names[i] = apps.get(i).loadLabel(getPackageManager()).toString();
+            names[i] = apps.get(i).loadLabel(pm).toString();
         }
         new AlertDialog.Builder(this)
                 .setTitle("选择打开方式")
                 .setItems(names, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int which) {
                         ResolveInfo r = apps.get(which);
-                        settings.setTargetApp(r.activityInfo.packageName, r.activityInfo.name);
+                        settings.setTargetApp(r.activityInfo.packageName,
+                                r.activityInfo.name, modes.get(which));
                         rebuild();
                     }
                 })
@@ -342,24 +362,37 @@ public class MainActivity extends Activity {
     }
 
     private void sendToApp(Uri uri, String fileName, int pageCount) {
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("application/pdf");
-        send.putExtra(Intent.EXTRA_STREAM, uri);
-        send.setClipData(ClipData.newRawUri("", uri));
-        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-        String[] target = settings.getTargetApp();
+        String[] target = settings.getTargetApp();   // {pkg, activity, mode}
         String action = (pageCount > 1 ? "倒序重排后" : "单页无需重排，") + "发送 " + fileName;
+
         if (target != null) {
             try {
-                send.setComponent(new ComponentName(target[0], target[1]));
-                startActivity(send);
+                Intent launch;
+                if ("view".equals(target[2])) {
+                    // 目标以「打开/查看」方式接收（WPS 等多为这类）
+                    launch = new Intent(Intent.ACTION_VIEW);
+                    launch.setDataAndType(uri, "application/pdf");
+                } else {
+                    launch = new Intent(Intent.ACTION_SEND);
+                    launch.setType("application/pdf");
+                    launch.putExtra(Intent.EXTRA_STREAM, uri);
+                    launch.setClipData(ClipData.newRawUri("", uri));
+                }
+                launch.setComponent(new ComponentName(target[0], target[1]));
+                launch.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(launch);
                 toast(action);
                 return;
             } catch (Exception ignore) {
                 // 目标失效则退回系统选择
             }
         }
+        // 未设置目标：系统选择器（兼容 ACTION_SEND 语义）
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("application/pdf");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.setClipData(ClipData.newRawUri("", uri));
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivity(Intent.createChooser(send, action));
     }
 

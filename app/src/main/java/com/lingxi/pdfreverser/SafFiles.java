@@ -52,14 +52,55 @@ public class SafFiles {
         return out;
     }
 
-    /** 生成文件选择器可预定位到该目录的 document URI（供 EXTRA_INITIAL_URI 使用） */
-    public static Uri treeAsDocumentUri(Uri treeUri) {
-        try {
-            String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
-            return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
-        } catch (Exception e) {
-            return null;
+
+    /** 目录项：子目录或 PDF 文件（应用内文件夹浏览器用） */
+    public static class Entry {
+        public final String name;
+        public final String docId;   // DocumentsContract 的 document ID
+        public final boolean dir;
+        public final Uri uri;
+        public Entry(String name, String docId, boolean dir, Uri uri) {
+            this.name = name; this.docId = docId; this.dir = dir; this.uri = uri;
         }
+    }
+
+    /** 列出 treeUri 下某子目录（parentDocId 为 null/空 = 根）的子目录与 PDF */
+    public static List<Entry> listChildren(Context ctx, Uri treeUri, String parentDocId) {
+        List<Entry> out = new ArrayList<>();
+        try {
+            ContentResolver cr = ctx.getContentResolver();
+            String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
+            String parent = (parentDocId == null || parentDocId.isEmpty())
+                    ? treeDocId : parentDocId;
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parent);
+            String[] cols = { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                              DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                              DocumentsContract.Document.COLUMN_MIME_TYPE };
+            Cursor c = cr.query(children, cols, null, null, null);
+            if (c == null) return out;
+            while (c.moveToNext()) {
+                String id = c.getString(0);
+                String name = c.getString(1);
+                String mime = c.getString(2);
+                if (name == null) continue;
+                boolean isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
+                boolean isPdf = !isDir && ((mime != null && mime.equalsIgnoreCase("application/pdf"))
+                        || name.toLowerCase().endsWith(".pdf"));
+                if (isDir || isPdf) {
+                    Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id);
+                    out.add(new Entry(name, id, isDir, docUri));
+                }
+            }
+            c.close();
+        } catch (Exception ignore) { }
+        // 目录在前，各自按名称排序
+        java.util.Collections.sort(out, new java.util.Comparator<Entry>() {
+            @Override public int compare(Entry a, Entry b) {
+                if (a.dir != b.dir) return a.dir ? -1 : 1;
+                return a.name.compareToIgnoreCase(b.name);
+            }
+        });
+        return out;
     }
 
     /** 取树根目录的显示名 */
