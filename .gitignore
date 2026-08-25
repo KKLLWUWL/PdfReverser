@@ -8,3 +8,4 @@ tests/b64_*.txt
 tests/*_out_*.pdf
 tests/gen_test_pdfs.py
 tests/gen_icon.py
+node/
