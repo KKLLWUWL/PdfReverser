@@ -145,6 +145,10 @@ public class MainActivity extends Activity {
                 ListView list = new ListView(this);
                 list.setDivider(null);
                 list.setPadding(dp(12), 0, dp(12), dp(4));
+                // 固定高度：约展示 4 个文件并露出第 5 个，提示可继续滑动
+                LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(252));
+                list.setLayoutParams(llp);
                 list.setAdapter(new PdfAdapter(pdfs));
                 list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
                     @Override public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
