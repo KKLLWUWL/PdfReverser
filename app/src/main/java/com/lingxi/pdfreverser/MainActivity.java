@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -150,6 +151,31 @@ public class MainActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT, dp(252));
                 list.setLayoutParams(llp);
                 list.setAdapter(new PdfAdapter(pdfs));
+                // 嵌套滑动冲突解决：列表在手指方向还能被滚动时，
+                // 禁止外层 ScrollView 拦截（列表优先）；滚到边界后页面接管。
+                list.setOnTouchListener(new View.OnTouchListener() {
+                    private float downY;
+                    @Override public boolean onTouch(View v, MotionEvent event) {
+                        ListView lv = (ListView) v;
+                        switch (event.getAction()) {
+                            case MotionEvent.ACTION_DOWN:
+                                downY = event.getY();
+                                lv.getParent().requestDisallowInterceptTouchEvent(true);
+                                break;
+                            case MotionEvent.ACTION_MOVE:
+                                float dy = downY - event.getY();    // >0 上滑看下方、<0 下滑看上方
+                                boolean canScroll = (dy > 0 && lv.canScrollVertically(1))
+                                        || (dy < 0 && lv.canScrollVertically(-1));
+                                lv.getParent().requestDisallowInterceptTouchEvent(canScroll);
+                                break;
+                            case MotionEvent.ACTION_UP:
+                            case MotionEvent.ACTION_CANCEL:
+                                lv.getParent().requestDisallowInterceptTouchEvent(false);
+                                break;
+                        }
+                        return false;   // 不消费，让 ListView 自己滚动/点击
+                    }
+                });
                 list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
                     @Override public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                         processAndSend((PdfEntry) parent.getItemAtPosition(position));
